@@ -1,0 +1,173 @@
+#cloud-config
+# First-boot provisioning for the PLIMSOLL agent host.
+#
+# Rendered by Terraform (terraform/main.tf → local.cloud_init). Terraform values
+# are interpolated here, so shell variables are written unbraced ($var) and any
+# literal dollar-brace must be escaped as $${...} to survive templating.
+#
+# Note that cloud-init runs ONCE per instance. Re-running `terraform apply` does
+# not re-run this — it only replaces the instance if something forces
+# replacement. To redeploy the app, use `plimsoll-deploy` on the box (or the
+# redeploy job in .github/workflows/deploy.yml), which pulls and restarts.
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - docker.io
+  - iptables-persistent
+
+write_files:
+  # The agent's entire secret set. 0600 root-only, and deliberately NOT baked
+  # into the image — docker-entrypoint.sh reconstructs ~/.twak from the base64
+  # blobs in here at container start.
+  - path: /etc/plimsoll/plimsoll.env
+    permissions: "0600"
+    owner: root:root
+    encoding: b64
+    content: ${env_file_b64}
+
+  # 24/7 container on a 50 GB disk: without a log cap, json-file logging grows
+  # without bound and eventually wedges the host months from now.
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    owner: root:root
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" }
+      }
+
+  # Mounts the attached block volume at /data, formatting it only if it has no
+  # filesystem yet. That guard is what makes re-attaching an existing volume to a
+  # rebuilt instance preserve the ledger and learned weights instead of wiping
+  # them.
+  - path: /usr/local/sbin/plimsoll-mount-data
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/sh
+      set -eu
+
+      if mountpoint -q /data; then
+        echo "[mount-data] /data already mounted"
+        exit 0
+      fi
+
+      root_src=$(findmnt -no SOURCE /)
+      root_disk=$(lsblk -no pkname "$root_src" 2>/dev/null | head -1)
+      [ -n "$root_disk" ] || root_disk=$(basename "$root_src")
+
+      # The volume attachment is created after the instance, so on a first boot
+      # the disk may not have appeared yet. Wait rather than race it.
+      data_dev=""
+      i=0
+      while [ $i -lt 60 ]; do
+        for d in $(lsblk -dn -o NAME,TYPE | awk '$2=="disk" {print $1}'); do
+          if [ "$d" != "$root_disk" ]; then
+            data_dev="/dev/$d"
+            break
+          fi
+        done
+        [ -n "$data_dev" ] && break
+        i=$((i + 1))
+        sleep 5
+      done
+
+      if [ -z "$data_dev" ]; then
+        echo "[mount-data] no data volume appeared after 5 minutes" >&2
+        exit 1
+      fi
+
+      if ! blkid "$data_dev" >/dev/null 2>&1; then
+        echo "[mount-data] $data_dev is blank — formatting ext4"
+        mkfs.ext4 -F -L plimsoll-data "$data_dev"
+      else
+        echo "[mount-data] $data_dev already has a filesystem — preserving it"
+      fi
+
+      uuid=$(blkid -s UUID -o value "$data_dev")
+      mkdir -p /data
+
+      # nofail: a detached volume should degrade to a box you can SSH into and
+      # debug, not an instance that hangs on boot.
+      if ! grep -q "$uuid" /etc/fstab; then
+        echo "UUID=$uuid /data ext4 defaults,nofail 0 2" >> /etc/fstab
+      fi
+
+      mount /data
+      echo "[mount-data] mounted $data_dev at /data"
+
+  - path: /etc/systemd/system/plimsoll.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=PLIMSOLL trading agent (${instance_name})
+      After=docker.service network-online.target
+      Wants=network-online.target
+      Requires=docker.service
+      # Refuse to start unless /data is genuinely mounted. Without this, a failed
+      # volume mount lets the agent start and write its ledger and learned
+      # weights onto the boot disk under an empty /data — state that looks fine
+      # and silently diverges from the real history.
+      RequiresMountsFor=/data
+
+      [Service]
+      Restart=always
+      RestartSec=10
+      TimeoutStartSec=300
+
+      ExecStartPre=-/usr/bin/docker rm -f plimsoll
+      ExecStartPre=/usr/bin/docker pull ${container_image}
+      ExecStart=/usr/bin/docker run --rm --name plimsoll \
+        --env-file /etc/plimsoll/plimsoll.env \
+        -p ${snapshot_port}:8080 \
+        -v /data:/data \
+        ${container_image}
+      ExecStop=/usr/bin/docker stop --time 30 plimsoll
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Oracle's Ubuntu images ship an INPUT chain that REJECTs almost everything, so
+  # the OCI security list alone is not enough to expose the snapshot endpoint.
+  - path: /usr/local/sbin/plimsoll-open-port
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/sh
+      set -eu
+      port=${snapshot_port}
+      if ! iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null; then
+        iptables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT
+      fi
+      if command -v netfilter-persistent >/dev/null 2>&1; then
+        netfilter-persistent save || true
+      fi
+      echo "[open-port] tcp/$port accepted on INPUT"
+
+  # Redeploy = pull the newest image and restart. The unit pulls on every start,
+  # so this is really just a readable name for the operation.
+  - path: /usr/local/bin/plimsoll-deploy
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/sh
+      set -eu
+      echo "[deploy] pulling ${container_image}"
+      docker pull ${container_image}
+      systemctl restart plimsoll
+      sleep 3
+      systemctl --no-pager --lines=20 status plimsoll
+
+runcmd:
+  - ["/usr/local/sbin/plimsoll-open-port"]
+  - ["/usr/local/sbin/plimsoll-mount-data"]
+  # daemon.json only takes effect on a restart, and it must land before the
+  # agent's container starts logging.
+  - ["systemctl", "restart", "docker"]
+  - ["systemctl", "daemon-reload"]
+  - ["systemctl", "enable", "--now", "plimsoll.service"]
+
+final_message: "PLIMSOLL host ready after $UPTIME seconds — snapshot endpoint on :${snapshot_port}"

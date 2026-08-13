@@ -1,0 +1,70 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored — it will
+# hold live API keys and a wallet password, so it must never be committed.
+#
+# In CI none of this file is used: the deploy workflow passes every value as a
+# TF_VAR_* environment variable sourced from GitHub repo secrets.
+
+# --- OCI auth (from `oci setup config`, or the console) ---
+tenancy_ocid    = "ocid1.tenancy.oc1..aaaa..."
+user_ocid       = "ocid1.user.oc1..aaaa..."
+api_fingerprint = "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef"
+region          = "eu-frankfurt-1"
+
+# PEM CONTENTS, not a path. Reading it from disk keeps the key out of this file:
+api_private_key = file("~/.oci/oci_api_key.pem")
+
+# Leave empty for the tenancy root, which is where a fresh free-tier account
+# places everything.
+compartment_ocid = ""
+
+# --- access ---
+ssh_public_key = "ssh-ed25519 AAAAC3Nza... you@host"
+
+# No default on purpose. This is the SSH door to a host holding a funded wallet.
+# Your current address: curl -s ifconfig.me
+ssh_allowed_cidr = "203.0.113.4/32"
+
+# --- shape (defaults are the Always Free Ampere allocation) ---
+# instance_shape     = "VM.Standard.A1.Flex"
+# instance_ocpus     = 1
+# instance_memory_gb = 6
+# If apply fails with "Out of host capacity", try 1 then 2 — A1 capacity is
+# per-availability-domain and genuinely scarce.
+# availability_domain_index = 0
+
+# --- application ---
+container_image = "ghcr.io/niimer/twak-bot1:latest"
+
+# dev = real signals, real LLM, real quotes, NOTHING signed.
+# live = real swaps and real x402 payments from a funded wallet.
+plimsoll_mode = "dev"
+
+# --- secrets ---
+anthropic_api_key = ""
+cmc_api_key       = ""
+twak_access_id    = ""
+twak_hmac_secret  = ""
+
+# Required only for plimsoll_mode = "live" (a plan-time precondition enforces
+# that all three are present together):
+#   base64 -i ~/.twak/wallet.json      | tr -d '\n'
+#   base64 -i ~/.twak/credentials.json | tr -d '\n'
+twak_wallet_json_b64      = ""
+twak_credentials_json_b64 = ""
+twak_wallet_password      = ""
+
+# Public nodes rate-limit eth_getLogs, which is exactly how DEX flow is read.
+# Use a keyed endpoint for anything you intend to trade on.
+bsc_rpc_url          = "https://bsc-dataseed.binance.org"
+bsc_rpc_fallback_url = "https://bsc-dataseed.binance.org"
+
+telegram_bot_token = ""
+telegram_chat_id   = ""
+
+# Anything else from .env.example, without editing variables.tf:
+# extra_env = {
+#   PLIMSOLL_WATCHLIST          = "ETH,CAKE,DOGE"
+#   PLIMSOLL_RADAR_EVERY        = "2"
+#   PLIMSOLL_QUALIFIER_USD      = "2"
+#   PLIMSOLL_QUALIFIER_HOUR_UTC = "22"
+# }

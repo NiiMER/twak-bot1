@@ -1,0 +1,258 @@
+name: Deploy (OCI)
+
+# Builds the agent image and manages the Oracle Cloud Always Free infrastructure
+# that runs it. Split deliberately:
+#
+#   plan    — runs automatically on any change under terraform/. Read-only.
+#   apply   — NEVER automatic. This creates and destroys a host that holds a
+#             funded trading wallet, so it takes a deliberate workflow_dispatch
+#             with the action explicitly set.
+#
+# Required secrets are listed in terraform/README.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "constitution.json"
+      - "universe.yaml"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to run"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+      build_image:
+        description: "Build and push the container image first"
+        type: boolean
+        default: true
+      redeploy:
+        description: "SSH in afterwards and restart the agent onto the new image"
+        type: boolean
+        default: false
+
+# The state file has no locking (OCI Object Storage has no DynamoDB equivalent —
+# see terraform/backend.tf), so concurrent runs could corrupt it. This is the
+# only thing enforcing single-writer.
+concurrency:
+  group: deploy-oci
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    name: build + push image
+    # Skipped on PRs: a fork PR must not be able to push an image the production
+    # host will pull.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_image)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # arm64 is the one that matters — the default shape is Ampere A1. amd64 is
+      # built too so the config still works if you fall back to E2.1.Micro.
+      # QEMU makes the arm64 leg slow but correct; if that becomes annoying,
+      # split this into native ubuntu-24.04-arm + ubuntu-24.04 runners (free on
+      # public repos) and merge the manifests.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  terraform:
+    name: terraform ${{ github.event_name == 'workflow_dispatch' && inputs.action || 'plan' }}
+    runs-on: ubuntu-latest
+    # Two guards here:
+    #  - only gate on the image job when it actually ran;
+    #  - skip entirely for PRs from forks, which cannot see the secrets and would
+    #    otherwise fail at `terraform init` on every outside contribution.
+    needs: [image]
+    if: >-
+      always() &&
+      (needs.image.result == 'success' || needs.image.result == 'skipped') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    defaults:
+      run:
+        working-directory: terraform
+    outputs:
+      public_ip: ${{ steps.ip.outputs.public_ip }}
+
+    env:
+      # OCI Object Storage state bucket, reached over its S3-compatible API.
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_S3_SECRET_ACCESS_KEY }}
+
+      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+      TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+      TF_VAR_api_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+      TF_VAR_api_private_key: ${{ secrets.OCI_PRIVATE_KEY }}
+      TF_VAR_region: ${{ secrets.OCI_REGION }}
+      TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+
+      TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_ssh_allowed_cidr: ${{ secrets.SSH_ALLOWED_CIDR }}
+
+      TF_VAR_container_image: ghcr.io/${{ github.repository }}:latest
+      TF_VAR_plimsoll_mode: ${{ vars.PLIMSOLL_MODE || 'dev' }}
+
+      TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      TF_VAR_cmc_api_key: ${{ secrets.CMC_API_KEY }}
+      TF_VAR_twak_access_id: ${{ secrets.TWAK_ACCESS_ID }}
+      TF_VAR_twak_hmac_secret: ${{ secrets.TWAK_HMAC_SECRET }}
+      TF_VAR_twak_wallet_json_b64: ${{ secrets.TWAK_WALLET_JSON_B64 }}
+      TF_VAR_twak_credentials_json_b64: ${{ secrets.TWAK_CREDENTIALS_JSON_B64 }}
+      TF_VAR_twak_wallet_password: ${{ secrets.TWAK_WALLET_PASSWORD }}
+      TF_VAR_bsc_rpc_url: ${{ secrets.BSC_RPC_URL }}
+      TF_VAR_bsc_rpc_fallback_url: ${{ secrets.BSC_RPC_FALLBACK_URL }}
+      TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TF_VAR_telegram_chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.1
+
+      - name: Write backend config
+        env:
+          BUCKET: ${{ secrets.OCI_STATE_BUCKET }}
+          NAMESPACE: ${{ secrets.OCI_NAMESPACE }}
+          REGION: ${{ secrets.OCI_REGION }}
+        run: |
+          cat > backend.hcl <<EOF
+          bucket = "$BUCKET"
+          key    = "plimsoll/terraform.tfstate"
+          region = "$REGION"
+
+          skip_region_validation      = true
+          skip_credentials_validation = true
+          skip_requesting_account_id  = true
+          use_path_style              = true
+
+          endpoints = {
+            s3 = "https://$NAMESPACE.compat.objectstorage.$REGION.oraclecloud.com"
+          }
+          EOF
+
+      - run: terraform init -input=false -backend-config=backend.hcl
+
+      - run: terraform fmt -check -recursive
+
+      - run: terraform validate
+
+      - name: Plan
+        if: github.event_name != 'workflow_dispatch' || inputs.action == 'plan'
+        run: terraform plan -input=false -lock=false
+
+      - name: Apply
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+        run: terraform apply -input=false -auto-approve -lock=false
+
+      # Guarded by the same explicit dispatch input. Destroying takes the agent
+      # AND its /data volume — the decision ledger and learned weights — with it.
+      - name: Destroy
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy'
+        run: terraform destroy -input=false -auto-approve -lock=false
+
+      - name: Read public IP
+        id: ip
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+        run: echo "public_ip=$(terraform output -raw public_ip)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+        run: |
+          {
+            echo "### Agent deployed"
+            echo
+            echo "- Snapshot endpoint: \`$(terraform output -raw snapshot_url)\`"
+            echo "- Health: \`$(terraform output -raw health_url)\`"
+            echo
+            echo "Set \`PLIMSOLL_SNAPSHOT_URL\` in the dashboard's Vercel env to the snapshot endpoint."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  redeploy:
+    name: restart agent onto new image
+    needs: [terraform]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'apply' &&
+      inputs.redeploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for an SSH key
+        id: guard
+        env:
+          KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "SSH_PRIVATE_KEY is not set — skipping. Run 'plimsoll-deploy' on the box instead." >&2
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pull the new image and restart
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          HOST: ${{ needs.terraform.outputs.public_ip }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+          # A freshly created instance has a host key we have never seen, so
+          # accept-new rather than pinning; the connection is authenticated by
+          # our key either way.
+          ssh -i ~/.ssh/id -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=30 "ubuntu@$HOST" 'sudo /usr/local/bin/plimsoll-deploy'

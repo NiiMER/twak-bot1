@@ -313,6 +313,21 @@ npm run dev                # the unattended runner (PLIMSOLL_MODE=live to trade)
 **Modes:** `dev` (default) = *dry-run-live* — real signals, real LLM, real
 on-chain quotes, **no signing**. `live` = real swaps + x402 (funded wallet).
 
+### Deploying the agent
+
+The agent is a plain Docker container, so any host runs it. Two are wired up:
+
+- **Railway** — `railway.json` + `Dockerfile`, mount a volume at `/data`.
+- **Oracle Cloud Always Free** — [`terraform/`](terraform/README.md) builds the
+  whole thing from scratch: an Ampere A1 instance (arm64, 1 OCPU / 6 GB), a
+  separate 50 GB volume for the ledger and learned weights, firewall, and a
+  systemd unit that pulls the image from GHCR and restarts on failure.
+  `.github/workflows/deploy.yml` builds the multi-arch image and runs Terraform;
+  plans are automatic, **apply and destroy are manual-dispatch only**.
+
+Either way the agent serves its snapshot on `:8080` — point the dashboard's
+`PLIMSOLL_SNAPSHOT_URL` at it.
+
 ### Testing
 
 Three suites, all run in CI on every PR:

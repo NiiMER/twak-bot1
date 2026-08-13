@@ -16,3 +16,21 @@ radar.json
 daily.json
 snapshot.json
 baseline.json
+
+# --- Terraform (OCI deployment) ---
+# State holds every secret passed in as a variable, in plaintext. It belongs in
+# the remote backend (see terraform/backend.tf), never in git.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
