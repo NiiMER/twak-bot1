@@ -76,6 +76,18 @@ describe("assessPromotion", () => {
     expect(a.ready).toBe(false);
   });
 
+  it("fails a metric measured too few times, however good those readings are", () => {
+    // The bug this guards: median() silently skips missing readings, so three
+    // observations containing ONE huge liquidity reading would otherwise clear
+    // the liquidity floor — contradicting the fail-closed rule.
+    const sparse = [obs({ liquidityUsd: 9_000_000 }), obs({ liquidityUsd: undefined }), obs({ liquidityUsd: undefined })];
+    const a = assessPromotion("X", sparse, C);
+    const liq = a.checks.find((k) => k.name === "liquidity");
+    expect(liq?.ok).toBe(false);
+    expect(liq?.detail).toMatch(/only 1 of 3/);
+    expect(a.ready).toBe(false);
+  });
+
   it("fails a check whose measurement is missing — absence of evidence isn't evidence", () => {
     const blind = [obs({ liquidityUsd: undefined }), obs({ liquidityUsd: undefined }), obs({ liquidityUsd: undefined })];
     const a = assessPromotion("X", blind, C);

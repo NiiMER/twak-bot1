@@ -17,22 +17,59 @@ import sample from "../data/sample-snapshot.json";
  *  treated as "no snapshot" and falls through to the next tier. */
 export function isSnapshot(v: unknown): v is Snapshot {
   if (!v || typeof v !== "object") return false;
-  const s = v as Partial<Snapshot>;
-  const obj = (x: unknown) => !!x && typeof x === "object";
+  const s = v as Record<string, never>;
+
+  const obj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+  const str = (x: unknown) => typeof x === "string";
+  const num = (x: unknown) => typeof x === "number" && Number.isFinite(x);
+  // Checking only that a block is an object is not enough: `agent: {}` passes
+  // that, and the console then calls short(agent.wallet) → undefined.slice, or
+  // .toFixed on a missing number — the same 500 this guard exists to prevent.
+  // So verify the fields the console actually dereferences, with their types.
+  const has = (block: unknown, checks: Record<string, (x: unknown) => boolean>) =>
+    obj(block) && Object.entries(checks).every(([k, ok]) => ok(block[k]));
+
   return (
-    obj(s.agent) &&
-    obj(s.latestDecision) &&
-    obj(s.signals) &&
-    obj(s.portfolio) &&
-    // The sparkline divides by (length - 1) and takes min/max — an empty curve
-    // produces NaN geometry rather than an empty chart.
-    Array.isArray(s.portfolio?.equityCurve) &&
-    s.portfolio!.equityCurve.length > 0 &&
-    obj(s.guardrails) &&
-    obj(s.learning) &&
+    has(s.agent, { name: str, mode: str, wallet: str, agentId: str, registry: str, constitutionHash: str }) &&
+    has(s.latestDecision, {
+      asset: str,
+      regime: str,
+      direction: str,
+      conviction: num,
+      thesis: str,
+      sizeUsd: num,
+      kernelReason: str,
+    }) &&
+    has(s.signals, { cmc: obj, chain: obj }) &&
+    has(s.portfolio, { equityUsd: num, peakEquityUsd: num, drawdownPct: num }) &&
+    // The sparkline maps i / (length - 1); a single point divides by zero and a
+    // zero-length curve takes min/max of nothing — both yield NaN SVG geometry.
+    Array.isArray((s.portfolio as Record<string, unknown>).equityCurve) &&
+    ((s.portfolio as Record<string, unknown>).equityCurve as unknown[]).length >= 2 &&
+    ((s.portfolio as Record<string, unknown>).equityCurve as unknown[]).every((p) => has(p, { equity: num })) &&
+    has(s.guardrails, {
+      allowlist: num,
+      perTradePct: num,
+      dailyPct: num,
+      slippageBps: num,
+      liquidityFloorUsd: num,
+      killSwitchPct: num,
+      dqPct: num,
+    }) &&
+    has(s.learning, { trending: num, chopping: num, risk_off: num }) &&
     Array.isArray(s.ledger) &&
-    obj(s.backtest) &&
-    obj(s.proof)
+    has(s.backtest, {
+      asset: str,
+      candles: num,
+      buyHoldPct: num,
+      strategyPct: num,
+      grossPct: num,
+      maxDdPct: num,
+      trades: num,
+      winRatePct: num,
+    }) &&
+    has(s.proof, { swapTx: str, registerTx: str, setMetadataTx: str, competeTx: str }) &&
+    num(s.cycle)
   );
 }
 

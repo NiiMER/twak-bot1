@@ -50,11 +50,29 @@ export interface Universe {
   promotion: PromotionCriteria;
 }
 
+/** The comparison key for a symbol.
+ *
+ *  Symbols are compared case-insensitively, but the STORED symbol keeps its
+ *  original case on purpose: constitution.json's allowlist contains mixed-case
+ *  entries (XAUt, USDe, lisUSD, BabyDoge) and the kernel matches it exactly, so
+ *  upper-casing the stored value would silently make those un-tradeable.
+ *  Everything that asks "is this the same asset?" must go through this. */
+export const canonSymbol = (s: string): string => s.trim().toUpperCase();
+
+// A symbol is trimmed first, THEN required to be non-empty — otherwise a
+// whitespace-only entry ("  ") passes .min(1) and normalizes to "".
+const SymbolSchema = z
+  .string()
+  .transform((s) => s.trim())
+  .refine((s) => s.length > 0, { message: "symbol must not be blank" });
+
 // A tier entry is either a bare symbol or a {symbol, note} object — both normalize
-// to UniverseAsset so the rest of the system sees one shape.
+// to UniverseAsset so the rest of the system sees one shape. The object variant is
+// .strict() for the same reason the top level is: a typo'd key here would be
+// stripped silently.
 const AssetEntrySchema = z.union([
-  z.string().min(1),
-  z.object({ symbol: z.string().min(1), note: z.string().optional() }),
+  SymbolSchema,
+  z.object({ symbol: SymbolSchema, note: z.string().optional() }).strict(),
 ]);
 
 const PromotionSchema = z.object({
@@ -78,7 +96,8 @@ const UniverseSchema = z
   .strict();
 
 function normalize(entry: z.infer<typeof AssetEntrySchema>): UniverseAsset {
-  return typeof entry === "string" ? { symbol: entry.trim() } : { symbol: entry.symbol.trim(), note: entry.note };
+  // Already trimmed by SymbolSchema; case is preserved deliberately (see canonSymbol).
+  return typeof entry === "string" ? { symbol: entry } : { symbol: entry.symbol, note: entry.note };
 }
 
 /** First duplicate symbol in a tier, or undefined. Case-insensitive: a config
@@ -86,7 +105,7 @@ function normalize(entry: z.infer<typeof AssetEntrySchema>): UniverseAsset {
 function firstDuplicate(assets: UniverseAsset[]): string | undefined {
   const seen = new Set<string>();
   for (const a of assets) {
-    const key = a.symbol.toUpperCase();
+    const key = canonSymbol(a.symbol);
     if (seen.has(key)) return a.symbol;
     seen.add(key);
   }
@@ -103,8 +122,8 @@ export function buildUniverse(raw: unknown, allowlist: string[]): Universe {
 
   // A symbol in both tiers is ambiguous about the one thing that matters — may
   // this spend money? Refuse to guess.
-  const radarSet = new Set(radar.map((a) => a.symbol.toUpperCase()));
-  const both = watchlist.find((a) => radarSet.has(a.symbol.toUpperCase()));
+  const radarSet = new Set(radar.map((a) => canonSymbol(a.symbol)));
+  const both = watchlist.find((a) => radarSet.has(canonSymbol(a.symbol)));
   if (both) {
     throw new Error(
       `universe: ${both.symbol} is in BOTH watchlist and radar — a symbol is either traded or observed, not both`,

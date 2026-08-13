@@ -96,10 +96,26 @@ export function assessPromotion(
     };
   }
 
-  const medLiquidity = median(observations.map((o) => o.liquidityUsd));
-  const medVolume = median(observations.map((o) => o.volume24hUsd));
-  const medSwaps = median(observations.map((o) => o.swapCount));
-  const avgConviction = mean(observations.map((o) => o.conviction));
+  // Coverage matters as much as the value. median()/mean() silently skip missing
+  // readings, so without a per-metric sample count, 12 observations containing a
+  // SINGLE liquidity reading would clear the liquidity check — which contradicts
+  // the rule this gate exists to enforce (a missing measurement fails). Each
+  // metric must therefore be measured at least minObservations times.
+  const readings = <T>(pick: (o: RadarObservation) => T | undefined) =>
+    observations.map(pick).filter((v): v is T => v !== undefined && (typeof v !== "number" || Number.isFinite(v)));
+
+  const liq = readings((o) => o.liquidityUsd);
+  const vol = readings((o) => o.volume24hUsd);
+  const swaps = readings((o) => o.swapCount);
+  const convictions = readings((o) => o.conviction);
+
+  const medLiquidity = median(liq);
+  const medVolume = median(vol);
+  const medSwaps = median(swaps);
+  const avgConviction = mean(convictions);
+
+  const covered = (n: number) => n >= c.minObservations;
+  const shortfall = (n: number) => `only ${n} of ${c.minObservations} observations measured it`;
 
   const checks: PromotionCheck[] = [
     {
@@ -109,35 +125,31 @@ export function assessPromotion(
     },
     {
       name: "liquidity",
-      ok: medLiquidity !== undefined && medLiquidity >= c.minLiquidityUsd,
-      detail:
-        medLiquidity === undefined
-          ? "no on-chain liquidity reading yet"
-          : `median ${usd(medLiquidity)} vs floor ${usd(c.minLiquidityUsd)}`,
+      ok: covered(liq.length) && medLiquidity !== undefined && medLiquidity >= c.minLiquidityUsd,
+      detail: !covered(liq.length)
+        ? `on-chain liquidity: ${shortfall(liq.length)}`
+        : `median ${usd(medLiquidity!)} vs floor ${usd(c.minLiquidityUsd)}`,
     },
     {
       name: "volume24h",
-      ok: medVolume !== undefined && medVolume >= c.minVolume24hUsd,
-      detail:
-        medVolume === undefined
-          ? "no 24h volume reading yet"
-          : `median ${usd(medVolume)} vs floor ${usd(c.minVolume24hUsd)}`,
+      ok: covered(vol.length) && medVolume !== undefined && medVolume >= c.minVolume24hUsd,
+      detail: !covered(vol.length)
+        ? `24h volume: ${shortfall(vol.length)}`
+        : `median ${usd(medVolume!)} vs floor ${usd(c.minVolume24hUsd)}`,
     },
     {
       name: "swapCount",
-      ok: medSwaps !== undefined && medSwaps >= c.minSwapCount,
-      detail:
-        medSwaps === undefined
-          ? "no swap-count reading yet"
-          : `median ${medSwaps} vs floor ${c.minSwapCount} per window`,
+      ok: covered(swaps.length) && medSwaps !== undefined && medSwaps >= c.minSwapCount,
+      detail: !covered(swaps.length)
+        ? `swap count: ${shortfall(swaps.length)}`
+        : `median ${medSwaps} vs floor ${c.minSwapCount} per window`,
     },
     {
       name: "conviction",
-      ok: avgConviction !== undefined && avgConviction >= c.minAvgConviction,
-      detail:
-        avgConviction === undefined
-          ? "no brain reading yet"
-          : `mean ${avgConviction.toFixed(2)} vs floor ${c.minAvgConviction.toFixed(2)}`,
+      ok: covered(convictions.length) && avgConviction !== undefined && avgConviction >= c.minAvgConviction,
+      detail: !covered(convictions.length)
+        ? `brain conviction: ${shortfall(convictions.length)}`
+        : `mean ${avgConviction!.toFixed(2)} vs floor ${c.minAvgConviction.toFixed(2)}`,
     },
   ];
 
@@ -157,7 +169,16 @@ export function loadRadar(): RadarStore {
   try {
     if (!existsSync(RADAR_PATH)) return {};
     const parsed = JSON.parse(readFileSync(RADAR_PATH, "utf8"));
-    return parsed && typeof parsed === "object" ? (parsed as RadarStore) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    // Valid JSON is not a valid store. `{"PENDLE":{}}` would be cast straight to
+    // RadarStore and then blow up in recordObservation (spreading a non-array) or
+    // assessPromotion (.some on a non-array) — which breaks the never-throws
+    // contract this function advertises. Keep only well-formed histories.
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        ([, history]) => Array.isArray(history) && history.every((o) => o && typeof o === "object"),
+      ),
+    ) as RadarStore;
   } catch {
     return {};
   }

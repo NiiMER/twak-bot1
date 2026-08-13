@@ -19,7 +19,7 @@ import {
   type OpenPosition,
 } from "./ops/positions.js";
 import { applyWeights, learnFromOutcome, loadWeights, saveWeights } from "./learning/index.js";
-import { loadUniverse, type PromotionCriteria } from "./universe/index.js";
+import { canonSymbol, loadUniverse, type PromotionCriteria } from "./universe/index.js";
 import { assessPromotion, loadRadar, pruneRadar, recordObservation, saveRadar } from "./radar/index.js";
 import type { LedgerEntry, PortfolioState } from "./types.js";
 
@@ -208,13 +208,41 @@ async function observeRadar(asset: string, promotion: PromotionCriteria, portfol
       (a.blocked ? ` BLOCKED (${a.blocked})` : failing.length ? ` pending: ${failing.join(", ")}` : " — ALL CHECKS PASS"),
   );
 
-  // A position open on a radar asset means it was demoted while held. The radar
-  // pass deliberately can't trade, so say so loudly — the operator must move it
-  // back to the watchlist to let the agent manage the exit.
+  // A position open on a radar asset means it was demoted while still held.
+  //
+  // The kernel deliberately allows EXITS on a radar asset (the veto sits after
+  // the exit path) — but that guarantee is worthless unless something actually
+  // asks the kernel. Previously this branch only alerted, so the position sat
+  // unmanaged until a human edited universe.yaml: an unattended agent held risk
+  // it had been told to stop holding. So route it through the kernel with
+  // radarOnly, which can only ever return a SELL here (buys are vetoed), and
+  // execute that. This is the one path on which a radar asset transacts, and it
+  // strictly REDUCES exposure.
   if ((portfolio.positions[asset] ?? 0) > 0) {
-    const msg = `${asset} is on RADAR but a position is open — radar never trades, so this position is unmanaged. Move it back to universe.yaml watchlist to let the agent exit it.`;
-    console.log(`[radar]  ⚠️  ${msg}`);
-    await alert("error", msg);
+    console.log(`[radar]  ⚠️  ${asset} is on RADAR with an open position — attempting a kernel-approved exit`);
+    const exit = evaluate(
+      { regime, asset, direction: "sell", conviction: 0, thesis: "radar demotion — flatten" },
+      portfolio,
+      loadConstitution(),
+      { regime, radarOnly: true, isHoneypot: bundle.chain.isHoneypot, liquidityUsd: bundle.chain.liquidityUsd },
+    );
+    if (exit.ok && exit.order.direction === "sell") {
+      try {
+        const res = await executeSwap(exit.order);
+        recordDailyTrade(exit.order.sizeUsd);
+        const msg = `${asset} exited from RADAR (demoted while held): sell $${exit.order.sizeUsd.toFixed(2)} → ${res.txHash}`;
+        console.log(`[radar]  ${msg}`);
+        await alert("info", msg);
+      } catch (e) {
+        const msg = `${asset} is on RADAR with an open position and the exit FAILED: ${(e as Error).message}`;
+        console.log(`[radar]  ⚠️  ${msg}`);
+        await alert("error", msg);
+      }
+    } else {
+      const msg = `${asset} is on RADAR with an open position but the kernel refused the exit: ${exit.ok ? "unexpected non-sell order" : exit.reason}`;
+      console.log(`[radar]  ⚠️  ${msg}`);
+      await alert("error", msg);
+    }
   }
 
   if (a.ready) {
@@ -237,7 +265,10 @@ async function runContinuous(): Promise<void> {
   // only. A malformed file throws here — if we can't say which assets may spend
   // money, refusing to start is the right answer.
   const universe = loadUniverse();
-  const radarSet = new Set(universe.radar.map((a) => a.symbol));
+  // canonSymbol, not raw: buildUniverse detects tier conflicts case-insensitively,
+  // so a raw-cased set here would let `radar: [cake]` + PLIMSOLL_WATCHLIST=CAKE
+  // slip through and trade an asset that is supposed to be observation-only.
+  const radarSet = new Set(universe.radar.map((a) => canonSymbol(a.symbol)));
 
   // PLIMSOLL_WATCHLIST still overrides the traded tier: existing deploys pass it
   // as an env var, and an ops override shouldn't need a config-file redeploy. It
@@ -264,10 +295,10 @@ async function runContinuous(): Promise<void> {
 
   // Radar wins any overlap. It's the stronger promise ("this asset does not
   // trade"), so an override that contradicts it is treated as the mistake.
-  const conflicts = watchlist.filter((s) => radarSet.has(s));
+  const conflicts = watchlist.filter((s) => radarSet.has(canonSymbol(s)));
   if (conflicts.length) {
     console.log(`[universe] ⚠️  also on radar, refusing to trade: ${conflicts.join(", ")}`);
-    watchlist = watchlist.filter((s) => !radarSet.has(s));
+    watchlist = watchlist.filter((s) => !radarSet.has(canonSymbol(s)));
   }
 
   if (dropped.length) console.log(`[universe] watchlist dropped (not in allowlist): ${dropped.join(", ")}`);
@@ -282,13 +313,14 @@ async function runContinuous(): Promise<void> {
   const radarEvery = envNum("PLIMSOLL_RADAR_EVERY", 1, 1);
   if (radar.length) {
     console.log(`[universe] radar (observe only, never trades) ${radar.length}: ${radar.join(", ")}`);
-    // Forget history for assets no longer watched, so stale evidence can't be
-    // resurrected months later if the symbol is re-added.
-    try {
-      saveRadar(pruneRadar(loadRadar(), universe.radar));
-    } catch {
-      /* radar store is evidence, not safety — never block startup on it */
-    }
+  }
+  // Prune UNCONDITIONALLY — including when the tier is now empty. Gating this on
+  // radar.length meant removing the last radar asset stranded its history, and
+  // re-adding that symbol later resurrected stale promotion evidence.
+  try {
+    saveRadar(pruneRadar(loadRadar(), universe.radar));
+  } catch {
+    /* radar store is evidence, not safety — never block startup on it */
   }
   const intervalMs = envNum("PLIMSOLL_INTERVAL_MS", 300_000, 1000); // 5 min, min 1s
   if (!config.telegram.botToken || !config.telegram.chatId) {
@@ -302,7 +334,7 @@ async function runContinuous(): Promise<void> {
     let ok = true;
     let portfolio: PortfolioState | undefined;
     try {
-      const r = await runOnce(asset, { radarOnly: radarSet.has(asset) });
+      const r = await runOnce(asset, { radarOnly: radarSet.has(canonSymbol(asset)) });
       const entry = r.entry;
       portfolio = r.portfolio;
       if (entry.exec) await alert("info", `${config.mode}: ${entry.proposal.direction} ${asset} → ${entry.exec.txHash}`);

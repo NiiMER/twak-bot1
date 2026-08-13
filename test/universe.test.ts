@@ -63,6 +63,26 @@ describe("buildUniverse", () => {
     expect(() => buildUniverse({ version: 1, radarPromotion: { minAvgConviction: 5 } }, ALLOW)).toThrow();
   });
 
+  it("trims symbols and rejects blank ones", () => {
+    const u = buildUniverse({ version: 1, watchlist: ["  ETH  "], radar: [] }, ALLOW);
+    expect(u.watchlist).toEqual([{ symbol: "ETH" }]);
+    // "  " passes a naive .min(1) but normalizes to an empty symbol.
+    expect(() => buildUniverse({ version: 1, watchlist: ["   "] }, ALLOW)).toThrow();
+    expect(() => buildUniverse({ version: 1, radar: [{ symbol: " " }] }, ALLOW)).toThrow();
+  });
+
+  it("rejects an unknown key inside an entry object", () => {
+    expect(() => buildUniverse({ version: 1, radar: [{ symbol: "X", nte: "typo" }] }, ALLOW)).toThrow();
+  });
+
+  it("preserves symbol case so mixed-case allowlist entries stay tradeable", () => {
+    // constitution.json holds XAUt / USDe / lisUSD — upper-casing the stored
+    // symbol would silently make every one of them un-tradeable.
+    const u = buildUniverse({ version: 1, watchlist: ["XAUt"], radar: [] }, ["XAUt"]);
+    expect(u.watchlist).toEqual([{ symbol: "XAUt" }]);
+    expect(u.dropped).toEqual([]);
+  });
+
   it("rejects unknown keys — a typo must not silently empty a tier", () => {
     // `watchList` would otherwise be stripped, leaving nothing traded and no error.
     expect(() => buildUniverse({ version: 1, watchList: ["ETH"] }, ALLOW)).toThrow();

@@ -20,15 +20,52 @@ vi.mock("node:fs", () => ({
 // tests can tell which tier the data came from.
 function wellFormed(name: string) {
   return {
-    agent: { name },
-    latestDecision: { asset: "CAKE" },
+    agent: { name, mode: "live", wallet: "0xabc", agentId: "1", registry: "0xreg", constitutionHash: "0xhash" },
+    asOf: "2026-08-13T00:00:00Z",
+    cycle: 1,
+    latestDecision: {
+      asset: "CAKE",
+      regime: "trending",
+      direction: "buy",
+      conviction: 0.5,
+      thesis: "t",
+      sizeUsd: 1,
+      approved: true,
+      kernelReason: "ok",
+    },
     signals: { cmc: {}, chain: {} },
-    portfolio: { equityUsd: 1, peakEquityUsd: 1, drawdownPct: 0, equityCurve: [{ t: "a", equity: 1 }] },
-    guardrails: {},
+    portfolio: {
+      equityUsd: 1,
+      peakEquityUsd: 1,
+      drawdownPct: 0,
+      equityCurve: [
+        { t: "a", equity: 1 },
+        { t: "b", equity: 2 },
+      ],
+    },
     learning: { trending: 1, chopping: 1, risk_off: 1 },
+    guardrails: {
+      allowlist: 148,
+      perTradePct: 15,
+      dailyPct: 40,
+      slippageBps: 100,
+      liquidityFloorUsd: 50_000,
+      killSwitchPct: 20,
+      dqPct: 30,
+      honeypotGate: true,
+    },
     ledger: [],
-    backtest: {},
-    proof: {},
+    backtest: {
+      asset: "CAKE",
+      candles: 1,
+      buyHoldPct: 0,
+      strategyPct: 0,
+      grossPct: 0,
+      maxDdPct: 0,
+      trades: 0,
+      winRatePct: 0,
+    },
+    proof: { swapTx: "0x1", registerTx: "0x2", setMetadataTx: "0x3", competeTx: "0x4" },
   };
 }
 
@@ -156,6 +193,38 @@ describe("isSnapshot — structural guard", () => {
     const { isSnapshot } = await import("@/lib/snapshot");
     const s = wellFormed("x");
     s.portfolio.equityCurve = [];
+    expect(isSnapshot(s)).toBe(false);
+  });
+
+  it("rejects a ONE-point equity curve — i/(length-1) divides by zero", async () => {
+    const { isSnapshot } = await import("@/lib/snapshot");
+    const s = wellFormed("x");
+    s.portfolio.equityCurve = [{ t: "a", equity: 1 }];
+    expect(isSnapshot(s)).toBe(false);
+  });
+
+  it("rejects a block that is present but EMPTY — the console dereferences into it", async () => {
+    const { isSnapshot } = await import("@/lib/snapshot");
+    // `agent: {}` is an object, but short(agent.wallet) then calls .slice on
+    // undefined and 500s the page — the exact failure this guard exists for.
+    for (const key of ["agent", "latestDecision", "portfolio", "guardrails", "backtest", "proof"]) {
+      const s = wellFormed("x") as Record<string, unknown>;
+      s[key] = {};
+      expect(isSnapshot(s), `empty ${key} must be rejected`).toBe(false);
+    }
+  });
+
+  it("rejects wrong primitive types inside a block", async () => {
+    const { isSnapshot } = await import("@/lib/snapshot");
+    const s = wellFormed("x") as unknown as Record<string, Record<string, unknown>>;
+    s.latestDecision.conviction = "high"; // string where a number is required
+    expect(isSnapshot(s)).toBe(false);
+  });
+
+  it("rejects a non-finite number where the console would render it", async () => {
+    const { isSnapshot } = await import("@/lib/snapshot");
+    const s = wellFormed("x") as unknown as Record<string, Record<string, unknown>>;
+    s.portfolio.equityUsd = Number.NaN;
     expect(isSnapshot(s)).toBe(false);
   });
 });
