@@ -1,0 +1,59 @@
+name: CI
+
+# The agent trades real funds on a live wallet, so the risk kernel, allocator and
+# constitution checks are the things standing between a bad proposal and a bad
+# trade. Run them on every change instead of trusting a local `npm test`.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the in-flight run obsolete — cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    name: agent — typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 to match the Dockerfile (node:22-slim) the live agent deploys on.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      # vitest is offline + deterministic by default: network/chain integration
+      # tests are gated behind a LIVE flag (see vitest.config.ts), so no API keys
+      # or RPC access are needed here and CI never spends x402 credits.
+      - run: npm test
+
+  dashboard:
+    name: dashboard — build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm ci
+        working-directory: dashboard
+
+      # `next build` typechecks the dashboard as a side effect, so this covers
+      # both compile errors and broken pages in one step.
+      - run: npm run build
+        working-directory: dashboard

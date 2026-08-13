@@ -15,6 +15,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/NiiMER/twak-bot1/actions/workflows/ci.yml"><img src="https://github.com/NiiMER/twak-bot1/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
+
+<p align="center">
   <sub>Built for <b>BNB Hack: AI Trading Agent Edition</b> · CoinMarketCap × Trust Wallet × BNB Chain · Tracks <b>1</b> (Autonomous Trading) + <b>2</b> (Strategy Skills)</sub>
 </p>
 
