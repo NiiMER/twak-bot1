@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Node 22 to match the Dockerfile (node:22-slim) the live agent deploys on.
       - uses: actions/setup-node@v4
@@ -33,9 +35,10 @@ jobs:
 
       - run: npm run typecheck
 
-      # vitest is offline + deterministic by default: network/chain integration
-      # tests are gated behind a LIVE flag (see vitest.config.ts), so no API keys
-      # or RPC access are needed here and CI never spends x402 credits.
+      # The suite is offline and deterministic: every test under test/ exercises
+      # pure functions only — no HTTP, no RPC, no twak spawn. So CI needs no API
+      # keys or wallet, and never spends x402 credits. Keep it that way: anything
+      # that reaches the network belongs behind an explicit opt-in env gate.
       - run: npm test
 
   dashboard:
@@ -43,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
