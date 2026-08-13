@@ -66,14 +66,6 @@ function wellFormed(name: string) {
       winRatePct: 0,
     },
     proof: { swapTx: "0x1", registerTx: "0x2", setMetadataTx: "0x3", competeTx: "0x4" },
-    latestDecision: { asset: "CAKE" },
-    signals: { cmc: {}, chain: {} },
-    portfolio: { equityUsd: 1, peakEquityUsd: 1, drawdownPct: 0, equityCurve: [{ t: "a", equity: 1 }] },
-    guardrails: {},
-    learning: { trending: 1, chopping: 1, risk_off: 1 },
-    ledger: [],
-    backtest: {},
-    proof: {},
   };
 }
 
