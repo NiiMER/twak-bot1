@@ -300,7 +300,7 @@ the Trust Wallet Agent Kit — all tx hashes are in the [proof table at the top]
 ```bash
 npm install
 cp .env.example .env       # CMC key (free tier), Claude (Anthropic) key, TWAK creds, BSC RPC
-npm test                   # 164 unit tests (deterministic, offline)
+npm test                   # agent unit tests (deterministic, offline)
 npm run typecheck          # strict TypeScript
 npm run tracer             # one decision cycle, end-to-end (real data, dry-run)
 npm run signals            # inspect the live signal bundle (CAKE)
@@ -313,6 +313,27 @@ npm run dev                # the unattended runner (PLIMSOLL_MODE=live to trade)
 **Modes:** `dev` (default) = *dry-run-live* — real signals, real LLM, real
 on-chain quotes, **no signing**. `live` = real swaps + x402 (funded wallet).
 
+### Testing
+
+Three suites, all run in CI on every PR:
+
+```bash
+npm test                        # agent — risk kernel, allocator, constitution, radar
+cd dashboard && npm test        # dashboard — pure logic + React component tests (jsdom)
+cd dashboard && npm run e2e     # dashboard — Playwright, real browser, real Next build
+```
+
+The e2e suite is the interesting one. `e2e/fixture-server.mjs` stands in for the
+live agent's snapshot endpoint, so tests drive a **production Next build in a real
+browser** through real agent states — approved trade, kernel veto, drawdown past
+the kill-switch, flagged honeypot, every signal unavailable, agent unreachable —
+across desktop and mobile viewports. Only the agent is faked; the page's own data
+layer, server rendering and markup are exercised for real.
+
+The states it guards are the ones a human uses to decide whether to trust the
+agent with money: **did it trade, did the kernel stop it, and is a missing signal
+honestly shown as missing** (an em-dash — never `undefined`).
+
 ## Project layout
 
 `src/signals` (CMC + chain-native + x402) · `src/brain` (Claude + rule fallback) ·
@@ -320,7 +341,8 @@ on-chain quotes, **no signing**. `live` = real swaps + x402 (funded wallet).
 `src/radar` (observe-only evidence + promotion review) · `src/exec` (Trust Wallet Agent Kit) ·
 `src/ops` (restart-state, heartbeat, daily caps, snapshot, daily-qualifier, live snapshot server) · `src/learning` ·
 `src/ledger` · `src/identity` (ERC-8004 + constitution commit) · `src/backtest`
-(real Binance klines) · `agent.ts` · `dashboard/` (Next.js live console).
+(real Binance klines) · `agent.ts` · `dashboard/` (Next.js live console, with
+`dashboard/test` unit tests and `dashboard/e2e` Playwright scenarios).
 
 ## Future vision
 

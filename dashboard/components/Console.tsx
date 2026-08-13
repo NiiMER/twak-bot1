@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import type { ReactNode } from "react";
 import type { Regime, Snapshot } from "@/lib/types";
+import { DASH, fmtUsd, n, short, tx, usd } from "@/lib/format";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PLIMSOLL Command — instrument-grade console. The AI proposes, the deterministic
@@ -24,15 +25,9 @@ const PIPE = [
   { k: "LEDGER", d: "trace + learn" },
 ] as const;
 
-const fmtUsd = (n: number) =>
-  n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${n.toFixed(2)}`;
-const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
-const tx = (h: string) => `https://bscscan.com/tx/${h}`;
-// Missing signals are legitimate (fail-soft fetch) — render a clean em-dash, never "undefined".
-const DASH = "—";
-const n = (v: number | undefined | null, d = 0, pre = "", suf = "") =>
-  v == null || !Number.isFinite(v) ? DASH : `${pre}${v.toFixed(d)}${suf}`;
-const usd = (v: number | undefined | null) => (v == null || !Number.isFinite(v) ? DASH : fmtUsd(v));
+// Formatters live in lib/format so they're unit-testable on their own. Missing
+// signals are legitimate (fail-soft fetch) — they render a clean em-dash, never
+// "undefined". See lib/format.ts.
 
 function Panel({
   title,
@@ -575,13 +570,17 @@ export function Console({ snap, live }: { snap: Snapshot; live: boolean }) {
           </div>
         </div>
 
-        {/* on-chain proof footer */}
-        <motion.footer
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5, duration: 0.6 }}
-          className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-hair px-1 py-4 font-mono text-[10px] text-fog"
-        >
+      </main>
+
+      {/* On-chain proof footer. Deliberately a sibling of <main>, not a child:
+          a <footer> scoped inside <main> is not exposed as a `contentinfo`
+          landmark, so screen-reader users lose the on-chain proof section. */}
+      <motion.footer
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.5, duration: 0.6 }}
+        className="mx-auto mt-4 flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-2 border-t border-hair px-5 pb-6 pt-4 font-mono text-[10px] text-fog sm:px-7"
+      >
           <span className="uppercase tracking-widest text-signal/70">on-chain proof ·</span>
           <a className="hover:text-signal" href={tx(snap.proof.swapTx)} target="_blank" rel="noreferrer">
             self-custodial swap ↗
@@ -595,9 +594,8 @@ export function Console({ snap, live }: { snap: Snapshot; live: boolean }) {
           <a className="hover:text-signal" href={tx(snap.proof.competeTx)} target="_blank" rel="noreferrer">
             competition register ↗
           </a>
-          <span className="ml-auto text-fog/50">registry {short(snap.agent.registry)} · BSC mainnet</span>
-        </motion.footer>
-      </main>
+        <span className="ml-auto text-fog/50">registry {short(snap.agent.registry)} · BSC mainnet</span>
+      </motion.footer>
     </div>
   );
 }

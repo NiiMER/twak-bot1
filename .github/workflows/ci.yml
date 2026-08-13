@@ -42,7 +42,7 @@ jobs:
       - run: npm test
 
   dashboard:
-    name: dashboard — build
+    name: dashboard — typecheck, unit tests, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +58,53 @@ jobs:
       - run: npm ci
         working-directory: dashboard
 
+      - run: npm run typecheck
+        working-directory: dashboard
+
+      # jsdom component + pure-logic tests. Fast, no browser.
+      - run: npm test
+        working-directory: dashboard
+
       # `next build` typechecks the dashboard as a side effect, so this covers
       # both compile errors and broken pages in one step.
       - run: npm run build
         working-directory: dashboard
+
+  e2e:
+    name: dashboard — e2e (playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm ci
+        working-directory: dashboard
+
+      # Only chromium: both projects (desktop + Pixel 5) are chromium-based, so
+      # this is the whole browser matrix. PLAYWRIGHT_CHROMIUM_PATH stays unset
+      # here — that override exists for sandboxes with a pre-baked browser.
+      - run: npx playwright install --with-deps chromium
+        working-directory: dashboard
+
+      # playwright.config.ts starts both servers: the fixture agent, and a
+      # production `next build && next start` fed by it.
+      - run: npm run e2e
+        working-directory: dashboard
+
+      # Traces/screenshots for whatever failed — the reason a red e2e run is
+      # diagnosable without reproducing it locally.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            dashboard/playwright-report/
+            dashboard/test-results/
+          retention-days: 7
