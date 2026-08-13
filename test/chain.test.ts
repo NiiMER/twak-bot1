@@ -27,8 +27,14 @@ describe("computeFlow (Swap-event buy/sell pressure)", () => {
     expect(f.dexImbalance!).toBeLessThan(0);
   });
 
-  it("returns empty on no flow", () => {
-    expect(computeFlow([], 600)).toEqual({});
-    expect(computeFlow([e(0, 0)], 600)).toEqual({});
+  it("returns no flow figures when there's no WBNB movement", () => {
+    expect(computeFlow([], 600)).toEqual({ swapCount: 0 });
+    // A swap with zero WBNB on both sides still HAPPENED — count it, but report
+    // no imbalance. Silence and zero-value activity are different signals.
+    expect(computeFlow([e(0, 0)], 600)).toEqual({ swapCount: 1 });
+  });
+
+  it("counts every swap in the window, flow or not", () => {
+    expect(computeFlow([e(3, 0), e(0, 1), e(0, 0)], 600).swapCount).toBe(3);
   });
 });

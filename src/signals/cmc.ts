@@ -14,6 +14,14 @@ export function mapQuotePrice(raw: any, symbol: string): number | undefined {
   return typeof price === "number" ? price : undefined;
 }
 
+/** /v2/cryptocurrency/quotes/latest → 24h traded USD volume for a symbol. */
+export function mapQuoteVolume24h(raw: any, symbol: string): number | undefined {
+  const entry = raw?.data?.[symbol] ?? raw?.data?.[symbol.toUpperCase()];
+  const item = Array.isArray(entry) ? entry[0] : entry;
+  const v = item?.quote?.USD?.volume_24h;
+  return typeof v === "number" ? v : undefined;
+}
+
 /** x402 /x402/v3/cryptocurrency/quotes/latest → { data: Coin[], status }.
  *  Unlike the keyed REST quote, data is an ARRAY and quote is an ARRAY, and
  *  multiple coins can share a symbol (meme impostors). Pick the active coin with

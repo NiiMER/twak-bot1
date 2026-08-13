@@ -1,7 +1,7 @@
 import { config } from "../config.js";
 import { resolveBscToken } from "../tokens/index.js";
 import { cachedTTL } from "../util/cache.js";
-import { mapFearGreed, mapQuotePrice } from "./cmc.js";
+import { mapFearGreed, mapQuotePrice, mapQuoteVolume24h } from "./cmc.js";
 import { fetchChainSignals, type ChainSignals } from "./chain.js";
 import { checkHoneypot } from "./honeypot.js";
 import { fetchMcpSignals, type McpSignals } from "./mcp.js";
@@ -61,16 +61,28 @@ export async function fetchSignalBundle(asset: string): Promise<SignalBundle> {
     });
     if (price !== undefined) bundle.paidViaX402 = true;
   }
+  // Hold the raw quote so 24h volume comes off the SAME response as the price —
+  // one call, two fields.
+  let quoteRaw: unknown;
   if (price === undefined) {
-    price = await cmcGet("/v2/cryptocurrency/quotes/latest", { symbol: asset })
-      .then((r) => mapQuotePrice(r, asset))
-      .catch((e) => {
-        console.warn(`  ⚠️  quotes/latest failed: ${(e as Error).message}`);
-        return undefined;
-      });
+    quoteRaw = await cmcGet("/v2/cryptocurrency/quotes/latest", { symbol: asset }).catch((e) => {
+      console.warn(`  ⚠️  quotes/latest failed: ${(e as Error).message}`);
+      return undefined;
+    });
+    if (quoteRaw !== undefined) price = mapQuotePrice(quoteRaw, asset);
   }
 
   bundle.cmc.priceUsd = price;
+  // 24h volume — depth-of-interest, and the strongest promotion signal for a radar
+  // asset. Free when we already fetched the quote above; on the live x402 path we
+  // never do, so fall back to a cached read. Volume is a slow 24h aggregate, so a
+  // TTL'd value is honest here and keeps the credit cost flat.
+  bundle.cmc.volume24hUsd =
+    quoteRaw !== undefined
+      ? mapQuoteVolume24h(quoteRaw, asset)
+      : await cachedTTL(`cmc:vol24h:${asset}`, GLOBALS_TTL_MS, () =>
+          cmcGet("/v2/cryptocurrency/quotes/latest", { symbol: asset }).then((r) => mapQuoteVolume24h(r, asset)),
+        ).catch(() => undefined);
   bundle.cmc.fearGreed = mcp.fearGreed ?? restFearGreed;
   bundle.cmc.fundingRate = mcp.fundingRate;
   bundle.cmc.rsi = mcp.rsi;
@@ -101,6 +113,7 @@ export async function fetchSignalBundle(asset: string): Promise<SignalBundle> {
         checkHoneypot(assetAddr),
       ]);
       bundle.chain.liquidityUsd = chain.liquidityUsd;
+      bundle.chain.swapCount = chain.swapCount;
       bundle.chain.dexImbalance = chain.dexImbalance;
       bundle.chain.walletFlow = chain.walletFlowUsd;
       // Only assert a verdict when the check succeeded; unverified stays undefined

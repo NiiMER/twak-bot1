@@ -1,0 +1,70 @@
+# THE TRADING UNIVERSE — which assets the agent trades, and which it only watches.
+#
+# Two tiers, and the difference is enforced by the deterministic risk kernel, not
+# by convention:
+#
+#   watchlist  TRADED. Signals → brain → kernel → exec. Real orders, real funds.
+#   radar      OBSERVED ONLY. Signals and brain analysis are recorded every pass,
+#              but the kernel refuses to construct any order that opens exposure.
+#              A radar asset cannot produce a transaction.
+#
+# Radar exists so you can build evidence on an asset BEFORE risking money on it:
+# each pass records price, DEX liquidity, 24h volume, on-chain swap count, the
+# news the brain saw, and the conviction it would have traded at. Once an asset
+# has cleared `radarPromotion` for long enough, `npm run radar` marks it a
+# candidate — you then move it into `watchlist` yourself. Nothing here promotes
+# an asset automatically; crossing a threshold is evidence, not permission.
+#
+# Entries take either form:
+#   - CAKE
+#   - symbol: CAKE
+#     note: why it's here
+#
+# Watchlist symbols must also appear in constitution.json's eligible allowlist —
+# anything else is dropped at load with a warning, since the kernel would reject
+# it anyway. Radar has no such restriction: watching an ineligible asset is the
+# point, and it can never trade regardless.
+
+version: 1
+
+watchlist:
+  - symbol: ETH
+    note: deepest liquidity on the allowlist — the core momentum sleeve
+  - symbol: CAKE
+    note: native BNB-Chain DEX token, reliable PancakeSwap depth
+  - symbol: DOGE
+    note: high retail flow, responds fast to narrative shifts
+  - XRP
+  - LINK
+  - AVAX
+  - UNI
+  - symbol: INJ
+    note: thinner book than the rest — sized down by conviction, watch slippage
+
+radar:
+  - symbol: PENDLE
+    note: yield narrative building; want sustained BSC depth before trading it
+  - symbol: FET
+    note: AI narrative is volatile — watching whether volume survives the hype
+  - symbol: AAVE
+    note: solid fundamentals, but confirm BSC-side swap activity is real
+  - symbol: ZEC
+    note: privacy narrative; watching for regulatory news before any exposure
+
+# Evidence a radar asset must show before `npm run radar` calls it a candidate.
+# Liquidity, volume and swap count are compared on the MEDIAN across recorded
+# observations, not the latest reading — one spike shouldn't earn a promotion.
+radarPromotion:
+  # How many observations before the asset is judged at all. Below this it's
+  # simply "watching" — too little history to say anything.
+  minObservations: 12
+  # Median on-chain DEX liquidity (PancakeSwap WBNB pair, read via RPC).
+  minLiquidityUsd: 250000
+  # Median 24h USD volume (CoinMarketCap).
+  minVolume24hUsd: 5000000
+  # Median DEX swaps seen per observation window — "is anyone actually trading it".
+  minSwapCount: 25
+  # Mean conviction the brain assigned while watching. This is where news lands:
+  # the brain reads headlines, narratives and macro events, so sustained
+  # conviction means the analysis held up across many passes, not one good day.
+  minAvgConviction: 0.35
