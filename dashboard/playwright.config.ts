@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 // E2E for the console: a real browser against a real production Next build,
@@ -13,7 +14,9 @@ export const FIXTURE_URL = `http://127.0.0.1:${FIXTURE_PORT}`;
 // build this Playwright pins. Setting PLAYWRIGHT_CHROMIUM_PATH points at that
 // binary instead of downloading one; unset (the CI default, after
 // `playwright install chromium`) Playwright uses its own.
-const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
+const preinstalledChrome = '/opt/pw-browsers/chromium';
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH ||
+  (existsSync(preinstalledChrome) ? preinstalledChrome : undefined);
 
 export default defineConfig({
   testDir: "./e2e",
