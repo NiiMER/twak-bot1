@@ -13,6 +13,7 @@ export interface SignalBundle {
   // added in Phase 2; the tracer bullet only needs `asset` + a price to flow.
   cmc: {
     priceUsd?: number;
+    volume24hUsd?: number; // 24h traded USD volume — depth-of-interest, drives radar promotion
     fearGreed?: number;
     fundingRate?: number;
     rsi?: number;
@@ -24,6 +25,7 @@ export interface SignalBundle {
   };
   chain: {
     liquidityUsd?: number; // on-chain DEX liquidity (PancakeSwap pair, via RPC) — safety gate
+    swapCount?: number; // DEX swaps in the lookback window (NOT 24h) — "is anyone trading it"
     dexImbalance?: number; // (future) buy/sell flow from Swap events
     walletFlow?: number; // (future)
     isHoneypot?: boolean;

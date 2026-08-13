@@ -4,3 +4,9 @@ out/
 next-env.d.ts
 .vercel
 *.tsbuildinfo
+
+# Playwright artifacts — traces, screenshots and reports are per-run output.
+test-results/
+playwright-report/
+blob-report/
+.playwright/

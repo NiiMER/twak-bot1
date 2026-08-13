@@ -9,6 +9,7 @@
     "tracer": "tsx src/agent.ts --once",
     "backtest": "tsx src/backtest/run.ts",
     "signals": "tsx src/signals/inspect.ts",
+    "radar": "tsx src/radar/report.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,6 +21,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "dotenv": "16.4.7",
     "viem": "2.21.55",
+    "yaml": "2.9.0",
     "zod": "3.25.76"
   },
   "devDependencies": {

@@ -15,9 +15,12 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev
 
-# App source (constitution.json is required at runtime by loadConstitution).
+# App source. constitution.json (loadConstitution) and universe.yaml
+# (loadUniverse) are both READ AT RUNTIME — without them the agent refuses to
+# start, so they must be in the image, not just the repo.
 COPY tsconfig.json ./
 COPY constitution.json ./
+COPY universe.yaml ./
 COPY src ./src
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh

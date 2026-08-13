@@ -11,12 +11,13 @@ import type {
 // Shared with the brain's rule proposer so both layers use one floor.
 export const MIN_LIQUIDITY_USD = 50_000;
 
-/** Pre-buy safety signals read from the live signal bundle (not in the
- *  constitution — these are runtime chain facts, not policy constants). */
+/** Runtime context for the kernel: live chain facts that aren't policy constants,
+ *  plus the asset's universe tier (from universe.yaml). */
 export interface SafetySignals {
   isHoneypot?: boolean; // honeypot.is verdict (undefined = unverified → don't block)
   liquidityUsd?: number; // on-chain DEX liquidity (undefined = unverified → don't block)
   regime?: Regime; // the DETERMINISTIC regime (detectRegime), not the LLM's self-label
+  radarOnly?: boolean; // observation tier — may never OPEN exposure (exits still allowed)
 }
 
 // SAFETY LAYER — the deterministic risk kernel. PURE function (no I/O) so it's
@@ -79,6 +80,15 @@ export function evaluate(
         maxSlippageBps: c.sizing.maxSlippageBps,
       },
     };
+  }
+
+  // 1c. RADAR TIER — observation only, enforced here rather than by the caller
+  //     remembering to skip it. Deliberately placed AFTER the exit path above: if
+  //     an asset is demoted from watchlist to radar while a position is still
+  //     open, we must always be able to sell out of it. What radar forbids is
+  //     OPENING exposure, which is the only thing left to reach this line.
+  if (safety.radarOnly === true) {
+    return { ok: false, reason: `asset ${proposal.asset} is radar-only (observation tier) — no new exposure` };
   }
 
   // 2. Allowlist — trades outside the 148 eligible tokens do not count.

@@ -27,6 +27,7 @@ export interface ChainSignals {
   liquidityUsd?: number;
   dexImbalance?: number; // (buy - sell) / (buy + sell), in [-1, 1]
   walletFlowUsd?: number; // net USD into the token over the window
+  swapCount?: number; // Swap events in the FLOW_BLOCKS window — raw trade count
 }
 
 /** Pure: USD value of a token/WBNB pool ≈ 2 × WBNB-side reserve × BNB price. */
@@ -34,22 +35,25 @@ export function computeLiquidityUsd(wbnbReserveRaw: bigint, bnbPriceUsd: number)
   return (Number(wbnbReserveRaw) / 1e18) * bnbPriceUsd * 2;
 }
 
-/** Pure: aggregate Swap WBNB in/out into imbalance + net USD flow. */
+/** Pure: aggregate Swap WBNB in/out into imbalance + net USD flow, plus the raw
+ *  swap count. The count is reported even when there's no net WBNB flow — zero
+ *  flow across 40 swaps is a real (and different) signal from silence. */
 export function computeFlow(
   events: { wbnbIn: bigint; wbnbOut: bigint }[],
   bnbPriceUsd: number,
-): { dexImbalance?: number; walletFlowUsd?: number } {
+): { dexImbalance?: number; walletFlowUsd?: number; swapCount: number } {
   let buyWbnb = 0n;
   let sellWbnb = 0n;
   for (const e of events) {
     buyWbnb += e.wbnbIn;
     sellWbnb += e.wbnbOut;
   }
+  const swapCount = events.length;
   const buyUsd = (Number(buyWbnb) / 1e18) * bnbPriceUsd;
   const sellUsd = (Number(sellWbnb) / 1e18) * bnbPriceUsd;
   const total = buyUsd + sellUsd;
-  if (total <= 0) return {};
-  return { dexImbalance: (buyUsd - sellUsd) / total, walletFlowUsd: buyUsd - sellUsd };
+  if (total <= 0) return { swapCount };
+  return { dexImbalance: (buyUsd - sellUsd) / total, walletFlowUsd: buyUsd - sellUsd, swapCount };
 }
 
 let client: ReturnType<typeof createPublicClient> | undefined;

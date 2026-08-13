@@ -9,6 +9,7 @@ snapshot.json
 ledger.jsonl
 weights.json
 positions.json
+radar.json
 peak.json
 daily.json
 *.tmp

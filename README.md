@@ -15,6 +15,10 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/NiiMER/twak-bot1/actions/workflows/ci.yml"><img src="https://github.com/NiiMER/twak-bot1/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
+
+<p align="center">
   <sub>Built for <b>BNB Hack: AI Trading Agent Edition</b> · CoinMarketCap × Trust Wallet × BNB Chain · Tracks <b>1</b> (Autonomous Trading) + <b>2</b> (Strategy Skills)</sub>
 </p>
 
@@ -112,6 +116,59 @@ Every cycle (default: one asset every 5 minutes) runs the same pipe:
 5. **Learns** — after a holding window, the decision is graded (skill vs luck)
    and the agent's per-regime confidence adapts. The decision ledger records the
    full trace — a readable, auditable trail of *why*.
+
+## The universe — what it trades, and what it only watches
+
+Which assets the agent may touch is **declarative config**, not code:
+[`universe.yaml`](universe.yaml). It has two tiers, and the difference is
+enforced by the risk kernel rather than by convention.
+
+```yaml
+watchlist:            # TRADED — signals → brain → kernel → exec
+  - symbol: ETH
+    note: deepest liquidity on the allowlist
+  - CAKE
+
+radar:                # OBSERVED ONLY — can never produce a transaction
+  - symbol: PENDLE
+    note: yield narrative building; want sustained BSC depth first
+```
+
+**Radar** is the answer to a real problem: you want to build a case on an asset
+*before* you risk money on it. A radar asset runs the same read path as a traded
+one — full signal bundle, and the brain still weighs its news, narratives and
+macro events — and then stops. `SafetySignals.radarOnly` makes the kernel refuse
+to construct any order that opens exposure, so "we don't trade this yet" is a
+property of the kernel, not a promise the caller has to remember to keep.
+
+One deliberate asymmetry: the veto sits *after* the exit path. If you demote an
+asset while a position is still open, you can always sell out of it — radar
+blocks **opening** exposure, never closing it.
+
+Each pass records what a promotion decision actually needs:
+
+| Evidence | Source |
+|---|---|
+| DEX liquidity | PancakeSwap WBNB pair, read via RPC |
+| 24h USD volume | CoinMarketCap quote |
+| Swap count | `Swap` events in the chain lookback window — *is anyone actually trading it* |
+| Conviction + thesis | The brain's read, which is where **news** lands |
+| Honeypot verdict | Disqualifying on its own |
+
+`npm run radar` grades each asset against the `radarPromotion` thresholds in the
+same YAML, on the **median** across observations so one spike can't earn a
+promotion, and a missing measurement fails its check — absence of evidence isn't
+evidence.
+
+```
+PENDLE   READY FOR REVIEW   100%  (37 obs)
+         ✅ liquidity     median $412,880 vs floor $250,000
+         ✅ swapCount     median 61 vs floor 25 per window
+```
+
+Clearing every check makes an asset a **candidate**, nothing more. Promotion is
+you moving it into `watchlist:` — crossing a threshold is evidence, not
+permission, and that edit is what authorizes spending money on it.
 
 ## Anatomy of one trade
 
@@ -243,7 +300,7 @@ the Trust Wallet Agent Kit — all tx hashes are in the [proof table at the top]
 ```bash
 npm install
 cp .env.example .env       # CMC key (free tier), Claude (Anthropic) key, TWAK creds, BSC RPC
-npm test                   # 164 unit tests (deterministic, offline)
+npm test                   # agent unit tests (deterministic, offline)
 npm run typecheck          # strict TypeScript
 npm run tracer             # one decision cycle, end-to-end (real data, dry-run)
 npm run signals            # inspect the live signal bundle (CAKE)
@@ -256,13 +313,36 @@ npm run dev                # the unattended runner (PLIMSOLL_MODE=live to trade)
 **Modes:** `dev` (default) = *dry-run-live* — real signals, real LLM, real
 on-chain quotes, **no signing**. `live` = real swaps + x402 (funded wallet).
 
+### Testing
+
+Three suites, all run in CI on every PR:
+
+```bash
+npm test                        # agent — risk kernel, allocator, constitution, radar
+cd dashboard && npm test        # dashboard — pure logic + React component tests (jsdom)
+cd dashboard && npm run e2e     # dashboard — Playwright, real browser, real Next build
+```
+
+The e2e suite is the interesting one. `e2e/fixture-server.mjs` stands in for the
+live agent's snapshot endpoint, so tests drive a **production Next build in a real
+browser** through real agent states — approved trade, kernel veto, drawdown past
+the kill-switch, flagged honeypot, every signal unavailable, agent unreachable —
+across desktop and mobile viewports. Only the agent is faked; the page's own data
+layer, server rendering and markup are exercised for real.
+
+The states it guards are the ones a human uses to decide whether to trust the
+agent with money: **did it trade, did the kernel stop it, and is a missing signal
+honestly shown as missing** (an em-dash — never `undefined`).
+
 ## Project layout
 
 `src/signals` (CMC + chain-native + x402) · `src/brain` (Claude + rule fallback) ·
-`src/kernel` (deterministic risk) · `src/exec` (Trust Wallet Agent Kit) ·
+`src/kernel` (deterministic risk) · `src/universe` (universe.yaml → traded/radar tiers) ·
+`src/radar` (observe-only evidence + promotion review) · `src/exec` (Trust Wallet Agent Kit) ·
 `src/ops` (restart-state, heartbeat, daily caps, snapshot, daily-qualifier, live snapshot server) · `src/learning` ·
 `src/ledger` · `src/identity` (ERC-8004 + constitution commit) · `src/backtest`
-(real Binance klines) · `agent.ts` · `dashboard/` (Next.js live console).
+(real Binance klines) · `agent.ts` · `dashboard/` (Next.js live console, with
+`dashboard/test` unit tests and `dashboard/e2e` Playwright scenarios).
 
 ## Future vision
 
