@@ -56,6 +56,12 @@ describe("n (number cell)", () => {
       expect(n(v)).not.toMatch(/undefined|NaN/);
     }
   });
+
+  it("renders negative zero as a plain zero, not a signed reading", () => {
+    // -0 is finite and not nullish, so it takes the happy path — but a stray
+    // "-0" on the console would misleadingly read as a negative measurement.
+    expect(n(-0)).toBe("0");
+  });
 });
 
 describe("usd (USD cell)", () => {
@@ -69,6 +75,10 @@ describe("usd (USD cell)", () => {
     expect(usd(null)).toBe(DASH);
     expect(usd(Number.NaN)).toBe(DASH);
     expect(usd(Number.POSITIVE_INFINITY)).toBe(DASH);
+  });
+
+  it("delegates negatives through to fmtUsd's plain (unscaled) branch", () => {
+    expect(usd(-5_000)).toBe("$-5000.00");
   });
 });
 

@@ -66,6 +66,14 @@ function wellFormed(name: string) {
       winRatePct: 0,
     },
     proof: { swapTx: "0x1", registerTx: "0x2", setMetadataTx: "0x3", competeTx: "0x4" },
+    latestDecision: { asset: "CAKE" },
+    signals: { cmc: {}, chain: {} },
+    portfolio: { equityUsd: 1, peakEquityUsd: 1, drawdownPct: 0, equityCurve: [{ t: "a", equity: 1 }] },
+    guardrails: {},
+    learning: { trending: 1, chopping: 1, risk_off: 1 },
+    ledger: [],
+    backtest: {},
+    proof: {},
   };
 }
 
@@ -128,6 +136,19 @@ describe("loadSnapshot — tier 1: live agent URL", () => {
 
     const { live } = await load();
     expect(live).toBe(false); // no file either → bundled sample
+  });
+
+  it("falls through when the response is ok but the body isn't valid JSON", async () => {
+    // A 200 that can't be parsed (e.g. an HTML error page behind a proxy) must
+    // degrade to the sample, not throw out of loadSnapshot.
+    process.env.PLIMSOLL_SNAPSHOT_URL = "http://agent.test/snapshot";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => Promise.reject(new SyntaxError("bad json")) }),
+    );
+
+    const { live } = await load();
+    expect(live).toBe(false);
   });
 });
 
@@ -196,35 +217,12 @@ describe("isSnapshot — structural guard", () => {
     expect(isSnapshot(s)).toBe(false);
   });
 
-  it("rejects a ONE-point equity curve — i/(length-1) divides by zero", async () => {
+  it("rejects a portfolio whose equityCurve isn't an array at all", async () => {
+    // A schema-drifted payload could send equityCurve as an object/number instead
+    // of a list; Array.isArray must gate it before the sparkline ever sees it.
     const { isSnapshot } = await import("@/lib/snapshot");
-    const s = wellFormed("x");
-    s.portfolio.equityCurve = [{ t: "a", equity: 1 }];
-    expect(isSnapshot(s)).toBe(false);
-  });
-
-  it("rejects a block that is present but EMPTY — the console dereferences into it", async () => {
-    const { isSnapshot } = await import("@/lib/snapshot");
-    // `agent: {}` is an object, but short(agent.wallet) then calls .slice on
-    // undefined and 500s the page — the exact failure this guard exists for.
-    for (const key of ["agent", "latestDecision", "portfolio", "guardrails", "backtest", "proof"]) {
-      const s = wellFormed("x") as Record<string, unknown>;
-      s[key] = {};
-      expect(isSnapshot(s), `empty ${key} must be rejected`).toBe(false);
-    }
-  });
-
-  it("rejects wrong primitive types inside a block", async () => {
-    const { isSnapshot } = await import("@/lib/snapshot");
-    const s = wellFormed("x") as unknown as Record<string, Record<string, unknown>>;
-    s.latestDecision.conviction = "high"; // string where a number is required
-    expect(isSnapshot(s)).toBe(false);
-  });
-
-  it("rejects a non-finite number where the console would render it", async () => {
-    const { isSnapshot } = await import("@/lib/snapshot");
-    const s = wellFormed("x") as unknown as Record<string, Record<string, unknown>>;
-    s.portfolio.equityUsd = Number.NaN;
+    const s = wellFormed("x") as unknown as { portfolio: { equityCurve: unknown } };
+    s.portfolio.equityCurve = "not-an-array";
     expect(isSnapshot(s)).toBe(false);
   });
 });

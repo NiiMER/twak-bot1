@@ -57,6 +57,22 @@ describe("risk kernel", () => {
       expect(evaluate(buy("CAKE"), healthy, C, { radarOnly: false }).ok).toBe(true);
       expect(evaluate(buy("CAKE"), healthy, C, {}).ok).toBe(true);
     });
+
+    it("rejects with the radar reason even for an asset outside the allowlist — the radar check runs first", () => {
+      // DOGE isn't in C.allowlist.symbols; if the allowlist check ran first the
+      // reason would say "not in allowlist" instead of "radar-only".
+      const d = evaluate(buy("DOGE"), healthy, C, { radarOnly: true });
+      expect(d.ok).toBe(false);
+      if (!d.ok) expect(d.reason).toMatch(/radar-only/);
+    });
+
+    it("blocks a flat radar asset's buy in risk-off with the radar reason, not the risk-off reason", () => {
+      // Nothing held, so 0b's flatten doesn't fire; the radar gate (1c) is hit
+      // before the risk-off buy gate (2b) further down.
+      const d = evaluate(buy("CAKE"), healthy, C, { radarOnly: true, regime: "risk_off" });
+      expect(d.ok).toBe(false);
+      if (!d.ok) expect(d.reason).toMatch(/radar-only/);
+    });
   });
 
   it("trips the drawdown kill-switch at the hard floor", () => {
