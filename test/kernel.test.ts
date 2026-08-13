@@ -31,6 +31,50 @@ describe("risk kernel", () => {
     expect(d.ok).toBe(false);
   });
 
+  describe("radar tier (observation only)", () => {
+    it("refuses to open exposure on a radar asset, even a perfect allowlisted buy", () => {
+      const d = evaluate(buy("CAKE"), healthy, C, { radarOnly: true });
+      expect(d.ok).toBe(false);
+      if (!d.ok) expect(d.reason).toMatch(/radar-only/);
+    });
+
+    it("still allows EXITING a radar asset — demoting one you hold must not trap it", () => {
+      const held: PortfolioState = { ...healthy, positions: { CAKE: 200 } };
+      const sell: Proposal = { regime: "chopping", asset: "CAKE", direction: "sell", conviction: 0.5, thesis: "t" };
+      const d = evaluate(sell, held, C, { radarOnly: true });
+      expect(d.ok).toBe(true);
+      if (d.ok) expect(d.order).toMatchObject({ direction: "sell", sizeUsd: 200 });
+    });
+
+    it("still flattens a held radar asset in risk-off", () => {
+      const held: PortfolioState = { ...healthy, positions: { CAKE: 150 } };
+      const d = evaluate(buy("CAKE"), held, C, { radarOnly: true, regime: "risk_off" });
+      expect(d.ok).toBe(true);
+      if (d.ok) expect(d.order).toMatchObject({ direction: "sell", sizeUsd: 150 });
+    });
+
+    it("leaves normal assets untouched when the flag is absent or false", () => {
+      expect(evaluate(buy("CAKE"), healthy, C, { radarOnly: false }).ok).toBe(true);
+      expect(evaluate(buy("CAKE"), healthy, C, {}).ok).toBe(true);
+    });
+
+    it("rejects with the radar reason even for an asset outside the allowlist — the radar check runs first", () => {
+      // DOGE isn't in C.allowlist.symbols; if the allowlist check ran first the
+      // reason would say "not in allowlist" instead of "radar-only".
+      const d = evaluate(buy("DOGE"), healthy, C, { radarOnly: true });
+      expect(d.ok).toBe(false);
+      if (!d.ok) expect(d.reason).toMatch(/radar-only/);
+    });
+
+    it("blocks a flat radar asset's buy in risk-off with the radar reason, not the risk-off reason", () => {
+      // Nothing held, so 0b's flatten doesn't fire; the radar gate (1c) is hit
+      // before the risk-off buy gate (2b) further down.
+      const d = evaluate(buy("CAKE"), healthy, C, { radarOnly: true, regime: "risk_off" });
+      expect(d.ok).toBe(false);
+      if (!d.ok) expect(d.reason).toMatch(/radar-only/);
+    });
+  });
+
   it("trips the drawdown kill-switch at the hard floor", () => {
     const drawn: PortfolioState = { ...healthy, equityUsd: 790, peakEquityUsd: 1000 }; // 21% dd
     const d = evaluate(buy("CAKE"), drawn, C);
